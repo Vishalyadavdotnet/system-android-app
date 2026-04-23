@@ -1,0 +1,32 @@
+ANDROID NATIVE LOGIC (FOR EDUCATIONAL REFERENCE)
+================================================
+
+To make this app work with REAL WhatsApp messages, you need to add this to your Android project:
+
+1. AndroidManifest.xml:
+-----------------------
+<service android:name=".NotificationService"
+    android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+    <intent-filter>
+        <action android:name="android.service.notification.NotificationListenerService" />
+    </intent-filter>
+</service>
+
+2. NotificationService.java:
+----------------------------
+public class NotificationService extends NotificationListenerService {
+    @Override
+    public void onNotificationPosted(StatusBarNotification sbn) {
+        if (sbn.getPackageName().equals("com.whatsapp")) {
+            Bundle extras = sbn.getNotification().extras;
+            String title = extras.getString("android.title"); // Sender
+            String text = extras.getCharSequence("android.text").toString(); // Message
+            
+            // Send to React Native
+            WritableMap params = Arguments.createMap();
+            params.putString("sender", title);
+            params.putString("message", text);
+            sendEvent("onNotification", params);
+        }
+    }
+}
