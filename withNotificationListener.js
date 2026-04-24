@@ -116,19 +116,15 @@ class NotificationService : NotificationListenerService() {
     private fun syncWithBackend(chat: String, sender: String, message: String) {
         Thread {
             try {
-                val prefs = applicationContext.getSharedPreferences("sraas_settings", 0)
-                var apiUrl = prefs.getString("apiUrl", "") ?: ""
-                if (apiUrl.isEmpty()) return@Thread
-                if (!apiUrl.endsWith("/api/webhooks/whatsapp/sync")) {
-                    if (apiUrl.endsWith("/")) apiUrl += "api/webhooks/whatsapp/sync"
-                    else apiUrl += "/api/webhooks/whatsapp/sync"
-                }
+                val apiUrl = "https://system-task-b6ra.onrender.com/api/webhooks/whatsapp/sync"
 
                 val url = java.net.URL(apiUrl)
                 val conn = url.openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.setRequestProperty("x-api-key", "SRAAS_SECRET_WEBHOOK_KEY_123")
+                conn.connectTimeout = 10000
+                conn.readTimeout = 10000
                 conn.doOutput = true
 
                 val msgObj = JSONObject()
@@ -394,19 +390,15 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     private fun syncWithBackend(chat: String, sender: String, message: String) {
         Thread {
             try {
-                val prefs = applicationContext.getSharedPreferences("sraas_settings", 0)
-                var apiUrl = prefs.getString("apiUrl", "") ?: ""
-                if (apiUrl.isEmpty()) return@Thread
-                if (!apiUrl.endsWith("/api/webhooks/whatsapp/sync")) {
-                    if (apiUrl.endsWith("/")) apiUrl += "api/webhooks/whatsapp/sync"
-                    else apiUrl += "/api/webhooks/whatsapp/sync"
-                }
+                val apiUrl = "https://system-task-b6ra.onrender.com/api/webhooks/whatsapp/sync"
 
                 val url = java.net.URL(apiUrl)
                 val conn = url.openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.setRequestProperty("x-api-key", "SRAAS_SECRET_WEBHOOK_KEY_123")
+                conn.connectTimeout = 10000
+                conn.readTimeout = 10000
                 conn.doOutput = true
 
                 val msgObj = JSONObject()
