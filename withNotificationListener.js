@@ -7,6 +7,9 @@ function withNotificationListenerService(config) {
         const manifest = config.modResults;
         const app = manifest.manifest.application[0];
         if (!app.service) app.service = [];
+        
+        // Allow HTTP connections to local backend
+        app.$['android:usesCleartextTraffic'] = 'true';
 
         const hasNLS = app.service.some(s => s.$['android:name'] === '.NotificationService');
         if (!hasNLS) {
@@ -105,7 +108,49 @@ class NotificationService : NotificationListenerService() {
             arr.put(obj)
             while (arr.length() > 500) arr.remove(0)
             prefs.edit().putString("messages", arr.toString()).apply()
+            
+            syncWithBackend(chat, sender, message)
         } catch (e: Exception) {}
+    }
+
+    private fun syncWithBackend(chat: String, sender: String, message: String) {
+        Thread {
+            try {
+                val prefs = applicationContext.getSharedPreferences("sraas_settings", 0)
+                var apiUrl = prefs.getString("apiUrl", "") ?: ""
+                if (apiUrl.isEmpty()) return@Thread
+                if (!apiUrl.endsWith("/api/webhooks/whatsapp/sync")) {
+                    if (apiUrl.endsWith("/")) apiUrl += "api/webhooks/whatsapp/sync"
+                    else apiUrl += "/api/webhooks/whatsapp/sync"
+                }
+
+                val url = java.net.URL(apiUrl)
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("x-api-key", "SRAAS_SECRET_WEBHOOK_KEY_123")
+                conn.doOutput = true
+
+                val msgObj = JSONObject()
+                msgObj.put("chat", chat)
+                msgObj.put("sender", sender)
+                msgObj.put("message", message)
+                msgObj.put("time", System.currentTimeMillis())
+
+                val arr = JSONArray()
+                arr.put(msgObj)
+
+                val payload = JSONObject()
+                payload.put("messages", arr)
+
+                val os = conn.outputStream
+                os.write(payload.toString().toByteArray(Charsets.UTF_8))
+                os.flush()
+                os.close()
+
+                conn.responseCode
+            } catch (e: Exception) {}
+        }.start()
     }
 
     private fun isDuplicate(chat: String, sender: String, message: String): Boolean {
@@ -341,7 +386,49 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             arr.put(obj)
             while (arr.length() > 500) arr.remove(0)
             prefs.edit().putString("messages", arr.toString()).apply()
+            
+            syncWithBackend(chat, sender, message)
         } catch (e: Exception) {}
+    }
+
+    private fun syncWithBackend(chat: String, sender: String, message: String) {
+        Thread {
+            try {
+                val prefs = applicationContext.getSharedPreferences("sraas_settings", 0)
+                var apiUrl = prefs.getString("apiUrl", "") ?: ""
+                if (apiUrl.isEmpty()) return@Thread
+                if (!apiUrl.endsWith("/api/webhooks/whatsapp/sync")) {
+                    if (apiUrl.endsWith("/")) apiUrl += "api/webhooks/whatsapp/sync"
+                    else apiUrl += "/api/webhooks/whatsapp/sync"
+                }
+
+                val url = java.net.URL(apiUrl)
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("x-api-key", "SRAAS_SECRET_WEBHOOK_KEY_123")
+                conn.doOutput = true
+
+                val msgObj = JSONObject()
+                msgObj.put("chat", chat)
+                msgObj.put("sender", sender)
+                msgObj.put("message", message)
+                msgObj.put("time", System.currentTimeMillis())
+
+                val arr = JSONArray()
+                arr.put(msgObj)
+
+                val payload = JSONObject()
+                payload.put("messages", arr)
+
+                val os = conn.outputStream
+                os.write(payload.toString().toByteArray(Charsets.UTF_8))
+                os.flush()
+                os.close()
+
+                conn.responseCode
+            } catch (e: Exception) {}
+        }.start()
     }
 
     override fun onInterrupt() {}
@@ -363,6 +450,12 @@ class MessageStoreModule(ctx: ReactApplicationContext) : ReactContextBaseJavaMod
     }
     @ReactMethod fun clearMessages(p: Promise) {
         try { reactApplicationContext.getSharedPreferences("sraas_messages",0).edit().putString("messages","[]").apply(); p.resolve(true) } catch(e:Exception) { p.resolve(false) }
+    }
+    @ReactMethod fun getApiUrl(p: Promise) {
+        try { val url = reactApplicationContext.getSharedPreferences("sraas_settings",0).getString("apiUrl","") ?: ""; p.resolve(url) } catch(e:Exception) { p.resolve("") }
+    }
+    @ReactMethod fun setApiUrl(url: String, p: Promise) {
+        try { reactApplicationContext.getSharedPreferences("sraas_settings",0).edit().putString("apiUrl", url).apply(); p.resolve(true) } catch(e:Exception) { p.resolve(false) }
     }
     @ReactMethod fun addTestMessage(p: Promise) {
         try {
