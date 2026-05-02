@@ -9,6 +9,7 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@expo/config-plugins": "^55.0.8",
     "expo": "~54.0.33",
     "expo-dev-client": "~6.0.20",
     "expo-file-system": "^55.0.17",

